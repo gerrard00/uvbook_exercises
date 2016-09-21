@@ -34,7 +34,8 @@ main(int argc, char **argv)
   uv_pipe_init(loop, &stdout_pipe, 0);
   uv_pipe_open(&stdout_pipe, 1);
 
-  int fd = uv_fs_open(loop, &file_req, argv[1], O_CREAT | O_RDWR, 644, NULL);
+  // TODO: support multiple files
+  int fd = uv_fs_open(loop, &file_req, argv[1], O_CREAT | O_RDWR, 0644, NULL);
   uv_pipe_init(loop, &file_pipe, 0);
   uv_pipe_open(&file_pipe, fd);
 
@@ -93,6 +94,7 @@ on_file_write(uv_write_t *req, int status)
 void
 write_data(uv_stream_t *dest, size_t size, uv_buf_t buf, uv_write_cb cb)
 {
+  //TODO: would be better if we didnt' have to copy the buffer every time; exercise for the reader
   write_req_t *req = (write_req_t*) malloc(sizeof(write_req_t));
   req->buf = uv_buf_init((char*) malloc(size), size);
   memcpy(req->buf.base, buf.base, size);
