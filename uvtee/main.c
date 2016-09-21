@@ -1,5 +1,8 @@
-#include <uv.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+#include <uv.h>
 
 typedef struct {
   uv_write_t req;
@@ -15,16 +18,13 @@ void on_stdout_write(uv_write_t *req, int status);
 void on_file_write(uv_write_t *req, int status);
 void write_data(uv_stream_t *dest, size_t size, uv_buf_t buf, uv_write_cb cb);
 
+bool read_complete;
+
 int
 main(int argc, char **argv)
 {
+  read_complete = false;
   uv_fs_t file_req;
-
-  /* printf("argc: %d\n", argc); */
-  /* printf("argv[0]: %s\n", argv[0]); */
-  /* printf("argv[1]: %s\n", argv[1]); */
-  /* printf("argv[2]: %s\n", argv[2]); */
-  /* return 0; */
 
   uv_loop_t *loop = uv_default_loop();
 
@@ -42,6 +42,9 @@ main(int argc, char **argv)
   uv_read_start((uv_stream_t*)&stdin_pipe, alloc_buffer, read_stdin);
 
   uv_run(loop, UV_RUN_DEFAULT);
+  uv_loop_close(loop);
+  /* we are using the default loop, don't have to close it */
+  /* free(loop); */
   return 0;
 }
 
@@ -54,12 +57,11 @@ alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf)
 void
 read_stdin(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
 {
-  if(nread < 0) {
+  if (nread < 0) {
     if (nread == UV_EOF) {
+      read_complete = true;
       // end of file
       uv_close((uv_handle_t*)&stdin_pipe, NULL);
-      uv_close((uv_handle_t*)&stdout_pipe, NULL);
-      uv_close((uv_handle_t*)&file_pipe, NULL);
     }
   } else if (nread > 0) {
     write_data((uv_stream_t*)&stdout_pipe, nread, *buf, on_stdout_write);
@@ -82,13 +84,27 @@ free_write_req(uv_write_t *req)
 void
 on_stdout_write(uv_write_t *req, int status)
 {
+  // getting UV_ECANCELED w/ original code from the book
+  /* if (status < 0) { */
+  /*   printf("\nbangarang: %s\n", uv_strerror(status)); */
+  /*   printf("\ncancelled? %s\n", status == UV_ECANCELED ? "yes" : "no"); */
+  /* } */
+
   free_write_req(req);
+
+  if (read_complete) {
+    uv_close((uv_handle_t*)&stdout_pipe, NULL);
+  }
 }
 
 void
 on_file_write(uv_write_t *req, int status)
 {
   free_write_req(req);
+
+  if (read_complete) {
+    uv_close((uv_handle_t*)&file_pipe, NULL);
+  }
 }
 
 void
