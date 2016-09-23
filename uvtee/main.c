@@ -10,17 +10,21 @@ typedef struct {
 } write_req_t;
 
 uv_pipe_t stdin_pipe, stdout_pipe;
-uv_pipe_t file_pipe;
+/* TODO: test for this */
+#define MAX_NUMBER_FILES 10
+uv_pipe_t file_pipes[MAX_NUMBER_FILES];
 void alloc_buffer(uv_handle_t*, size_t, uv_buf_t*);
 void read_stdin(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf);
 void free_write_req(uv_write_t *req);
 void on_stdout_write(uv_write_t *req, int status);
 void on_file_write(uv_write_t *req, int status);
-void write_data(uv_stream_t *dest, size_t size, uv_buf_t buf, uv_write_cb cb);
+void write_data(uv_stream_t *dest, size_t size, uv_buf_t buf, uv_write_cb cb, int file_index);
 
 bool read_complete;
 /* the number of writes before we can clear the buffer */
 int outstanding_writes;
+/* number of output files */
+int number_of_files;
 
 int
 main(int argc, char **argv)
@@ -36,10 +40,22 @@ main(int argc, char **argv)
   uv_pipe_init(loop, &stdout_pipe, 0);
   uv_pipe_open(&stdout_pipe, 1);
 
-  // TODO: support multiple files
-  int fd = uv_fs_open(loop, &file_req, argv[1], O_CREAT | O_RDWR, 0644, NULL);
-  uv_pipe_init(loop, &file_pipe, 0);
-  uv_pipe_open(&file_pipe, fd);
+  number_of_files = argc - 1;
+
+  if (number_of_files > MAX_NUMBER_FILES) {
+    fprintf(stderr, "Maximum number of files is %d\n", MAX_NUMBER_FILES);
+    return -1;
+  }
+
+  if (number_of_files) {
+    for(int file_index = 0; file_index < number_of_files; file_index++) {
+      /* the argv index is the file index + 1 for the process name */
+      int fd = uv_fs_open(loop, &file_req,
+          argv[file_index + 1], O_CREAT | O_RDWR, 0644, NULL);
+      uv_pipe_init(loop, &file_pipes[file_index], 0);
+      uv_pipe_open(&file_pipes[file_index], fd);
+    }
+  }
 
   uv_read_start((uv_stream_t*)&stdin_pipe, alloc_buffer, read_stdin);
 
@@ -66,15 +82,16 @@ read_stdin(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
       uv_close((uv_handle_t*)&stdin_pipe, NULL);
     }
   } else if (nread > 0) {
-    /* don't hardcode */
-    outstanding_writes = 2;
-    write_data((uv_stream_t*)&stdout_pipe, nread, *buf, on_stdout_write);
-    write_data((uv_stream_t*)&file_pipe, nread, *buf, on_file_write);
-  }
+    /* +1 for stdout */
+    outstanding_writes = number_of_files + 1;
+    /* TODO: make that -1 a macro */
+    write_data((uv_stream_t*)&stdout_pipe, nread, *buf, on_stdout_write, -1);
 
-  /* if(buf->base) { */
-  /*   free(buf->base); */
-  /* } */
+    for(int file_index = 0; file_index < number_of_files; file_index++) {
+      write_data((uv_stream_t*)&file_pipes[file_index],
+          nread, *buf, on_file_write, file_index);
+    }
+  }
 }
 
 void
@@ -92,12 +109,6 @@ free_write_req(uv_write_t *req)
 void
 on_stdout_write(uv_write_t *req, int status)
 {
-  // getting UV_ECANCELED w/ original code from the book
-  /* if (status < 0) { */
-  /*   printf("\nbangarang: %s\n", uv_strerror(status)); */
-  /*   printf("\ncancelled? %s\n", status == UV_ECANCELED ? "yes" : "no"); */
-  /* } */
-
   free_write_req(req);
 
   if (read_complete) {
@@ -108,17 +119,26 @@ on_stdout_write(uv_write_t *req, int status)
 void
 on_file_write(uv_write_t *req, int status)
 {
+  /* need to get int from void pointer */
+  int file_index = *((int*)req->data);
   free_write_req(req);
 
-  if (read_complete) {
-    uv_close((uv_handle_t*)&file_pipe, NULL);
+  if (read_complete && file_index > -1) {
+    uv_close((uv_handle_t*)&file_pipes[file_index], NULL);
   }
 }
 
 void
-write_data(uv_stream_t *dest, size_t size, uv_buf_t buf, uv_write_cb cb)
+write_data(uv_stream_t *dest,
+    size_t size, uv_buf_t buf, uv_write_cb cb, int file_index)
 {
+
   write_req_t *req = (write_req_t*) malloc(sizeof(write_req_t));
   req->buf = buf;
+
+  /* set the data on the uv_write_req to the file_index */
+  req->req.data = malloc(sizeof(int));
+  *((int*)req->req.data) = file_index;
+
   uv_write((uv_write_t*) req, (uv_stream_t*) dest, &req->buf, 1, cb);
 }
